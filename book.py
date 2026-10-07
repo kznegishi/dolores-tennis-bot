@@ -98,8 +98,23 @@ def login(page, email, password):
     dlg.locator("input:not([type=password])").first.fill(email)
     dlg.locator("input[type=password]").fill(password)
     dlg.locator("button[type=submit]").click()
-    page.get_by_role("button", name="View Bookings").wait_for(timeout=20000)
+    try:
+        page.locator('a[href="/app/fast-track"], button:has-text("Bookings")').first.wait_for(timeout=25000)
+    except PWTimeout:
+        raise RuntimeError("Login didn't complete. Page said: " + page_excerpt(page))
     log("Logged in")
+
+
+def page_excerpt(page, n=500):
+    """Visible text from the page (dialogs first), for error messages. Never includes the password."""
+    try:
+        txt = page.evaluate("""() => {
+            const d = [...document.querySelectorAll('[role=dialog],[role=alert]')].map(e => e.innerText).join(' / ');
+            return (d + ' || ' + document.body.innerText).replace(/\\s+/g, ' ');
+        }""")
+    except Exception as e:
+        txt = f"(couldn't read page: {e})"
+    return f"[{page.url}] " + re.sub(r"\S+@\S+", "<email>", txt)[:n]
 
 
 def my_booking_dates(page):
@@ -274,6 +289,7 @@ def main():
                                      f"bookings. Check the screenshots / rec.us.")
         except Exception as e:
             page.screenshot(path=str(SHOTS / "crash.png"), full_page=True)
+            log("Page at failure: " + page_excerpt(page, 800))
             write_result("fail", f"Bot error: {e}")
         finally:
             browser.close()
