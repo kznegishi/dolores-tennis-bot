@@ -36,9 +36,17 @@ SCHEDULE_API = f"https://api.rec.us/v1/locations/{LOCATION_ID}/schedule?startDat
 BOOKINGS_URL = "https://www.rec.us/app/schedule"
 
 WINDOWS = {
-    "morning": {"open_hour": 8, "days_ahead": 7, "courts": ["Court 1", "Court 2"]},  # 8 AM
-    "noon": {"open_hour": 12, "days_ahead": 2, "courts": ["Court 3"]},
+    "morning": {"open_hour": 8, "days_ahead": 7, "courts": ["Court 1", "Court 2"], "minutes": 90},  # 8 AM
+    "noon": {"open_hour": 12, "days_ahead": 2, "courts": ["Court 3"], "minutes": 60},
 }
+# rec.us "site activity" IDs (tennis) for each Dolores court, used by the direct booking request.
+SITE_ACTIVITY = {
+    "Court 1": "1bcdebfc-cb10-45e8-a914-b9e7a99bf9cb",
+    "Court 2": "06af27d8-eded-4d99-9c3f-5b2e17ff9730",
+    "Court 3": "e7220541-0d10-45a1-95a0-0cade5b20720",
+}
+API_RESERVE = "https://api.rec.us/v1/reservations"
+SESSION = {"auth": None, "user_id": None}  # filled in from the logged-in browser's own requests
 WEEKLY_CAP = 3
 SHOTS = Path("screenshots")
 SHOTS.mkdir(exist_ok=True)
@@ -207,6 +215,65 @@ def try_book(page, target, slot_label, courts, dry_run):
     return court
 
 
+def watch_session(page):
+    """Remember the login token and user id that the rec.us site itself uses (never printed)."""
+    def on_request(req):
+        if "api.rec.us" in req.url:
+            h = req.headers.get("authorization")
+            if h:
+                SESSION["auth"] = h
+            m = re.search(r"/users/([0-9a-f-]{36})/", req.url)
+            if m:
+                SESSION["user_id"] = m.group(1)
+    page.on("request", on_request)
+
+
+def api_book(page, court, target: date, slot_min, minutes):
+    """Send the same booking request the site sends when you press Book. Returns (ok, status, body)."""
+    start = datetime.combine(target, datetime.min.time()) + timedelta(minutes=slot_min)
+    end = start + timedelta(minutes=minutes)
+    body = {
+        "customerUserId": SESSION["user_id"],
+        "participantUserId": SESSION["user_id"],
+        "siteActivityIds": [SITE_ACTIVITY[court]],
+        "from": {"date": target.isoformat(), "time": start.strftime("%H:%M:%S")},
+        "to": {"date": target.isoformat(), "time": end.strftime("%H:%M:%S")},
+        "pendingFormSubmissions": [],
+    }
+    res = page.evaluate(
+        """async ({url, auth, body}) => {
+            const r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json', 'Authorization': auth}, body: JSON.stringify(body)});
+            return {status: r.status, text: (await r.text()).slice(0, 600)};
+        }""",
+        {"url": API_RESERVE, "auth": SESSION["auth"], "body": body})
+    return 200 <= res["status"] < 300, res["status"], res["text"]
+
+
+def fast_book(page, target, slot_min, w, open_at):
+    """Fire booking requests right at opening time, alternating courts, for ~15 seconds."""
+    if not (SESSION["auth"] and SESSION["user_id"]):
+        log("Fast path unavailable (no session captured); using click-through")
+        return None
+    while datetime.now(PT) < open_at:
+        time.sleep(0.005)
+    stop = time.time() + 15
+    tries = 0
+    while time.time() < stop:
+        for court in w["courts"]:
+            tries += 1
+            try:
+                ok, status, text = api_book(page, court, target, slot_min, w["minutes"])
+            except Exception as e:
+                ok, status, text = False, "error", str(e)[:200]
+            if ok or tries <= 4 or tries % 10 == 0:
+                log(f"direct booking {court}: {status} {text[:300]}")
+            if ok:
+                return court
+        time.sleep(0.15)
+    log(f"Direct booking didn't succeed after {tries} tries")
+    return None
+
+
 def main():
     email = os.environ["REC_EMAIL"].strip()
     password = os.environ["REC_PASSWORD"].strip("\r\n")
@@ -237,6 +304,7 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1100, "height": 1000})
+        watch_session(page)
         try:
             login(page, email, password)
 
@@ -250,6 +318,16 @@ def main():
             if len(in_week) >= WEEKLY_CAP:
                 write_result("skip", f"Weekly cap reached ({len(in_week)} bookings week of {week_start:%b %d})")
                 return
+
+            log(f"Session ready for direct booking: token={'yes' if SESSION['auth'] else 'no'}, "
+                f"user={'yes' if SESSION['user_id'] else 'no'}")
+            if not dry_run:
+                fast_court = fast_book(page, target, slot_min, w, open_at if not no_wait else datetime.now(PT))
+                if fast_court:
+                    if target in my_booking_dates(page):
+                        write_result("booked", f"Booked {fast_court} at Dolores, {target:%a %b %d} {slot_label}")
+                        return
+                    log("Direct booking said OK but it isn't in your bookings yet; trying click-through too")
 
             # Wait for the window to open, then poll until the slot shows as reservable.
             if not no_wait:
