@@ -206,6 +206,7 @@ def try_book(page, target, slot_label, courts, dry_run):
     if dry_run:
         return f"DRY RUN: would book {court} on {target:%a %b %d} at {slot_label}"
 
+    SESSION["clicked_book"] = True
     dlg.get_by_role("button", name="Book", exact=True).click()
     log(f"Clicked Book for {court}")
     issue_num = handle_text_code(page, court, target)
@@ -235,16 +236,25 @@ def gh(method, path, data=None):
 
 def wait_for_code_from_you(court, target, minutes=9.5):
     """Open a GitHub issue (you get an email / app notification) and wait for your reply with the code."""
+    slot = SESSION.get("slot") or "6:00 PM"
+    owner_login = os.environ.get("GITHUB_REPOSITORY_OWNER", "")
     issue = gh("POST", "/issues", {
-        "title": f"🎾 Court held — reply with your rec.us code ({court}, {target:%a %b %d} 6 PM)",
-        "body": (f"rec.us is holding **{court} at Dolores, {target:%A %b %d}, 6:00 PM** for about 10 minutes.\n\n"
+        "title": f"🎾 Court held — reply with your rec.us code ({court}, {target:%a %b %d} {slot})",
+        "body": (f"@{owner_login} rec.us is holding **{court} at Dolores, {target:%A %b %d}, {slot}** for about 10 minutes.\n\n"
                  "**Reply to this (email reply or GitHub app) with the code rec.us just texted you** — just the digits.")})
     num = issue["number"]
+    SESSION["issue"] = num
     owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "").lower()
     log(f"Waiting for your code on issue #{num}")
     stop = time.time() + minutes * 60
     while time.time() < stop:
-        for c in gh("GET", f"/issues/{num}/comments"):
+        try:
+            comments = gh("GET", f"/issues/{num}/comments")
+        except Exception as e:  # network blip: keep waiting
+            log(f"(retrying GitHub check: {e})")
+            time.sleep(3)
+            continue
+        for c in comments:
             if owner and c["user"]["login"].lower() != owner:
                 continue
             m = re.search(r"\b(\d{4,8})\b", c.get("body") or "")
@@ -362,6 +372,7 @@ def main():
     no_wait = env_bool("NO_WAIT")
     slot_label = os.environ.get("SLOT_TIME") or "6:00 PM"
     slot_min = slot_minutes(slot_label)
+    SESSION["slot"] = slot_label
 
     now = datetime.now(PT)
     mode = (os.environ.get("MODE") or "auto").lower()
@@ -437,7 +448,7 @@ def main():
                 except Exception as e:
                     log(f"Attempt {attempt} failed: {e}")
                     page.screenshot(path=str(SHOTS / f"error_{attempt}.png"), full_page=True)
-                    if attempt == 3 or SESSION["issue"] or "No code received" in str(e):
+                    if attempt == 3 or SESSION.get("clicked_book") or SESSION["issue"]:
                         raise  # never re-book once a code request has gone out
             if dry_run:
                 write_result("dry_run", court)
