@@ -52,6 +52,7 @@ jobs:
         env:
           REC_EMAIL: ${{ secrets.REC_EMAIL }}
           REC_PASSWORD: ${{ secrets.REC_PASSWORD }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
           NO_WAIT: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'auto' }}
