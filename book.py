@@ -46,7 +46,10 @@ SITE_ACTIVITY = {
     "Court 3": "e7220541-0d10-45a1-95a0-0cade5b20720",
 }
 API_RESERVE = "https://api.rec.us/v1/reservations"
-SESSION = {"auth": None, "user_id": None}  # filled in from the logged-in browser's own requests
+# Direct request is off: rec.us requires a texted code on every booking, which only the
+# normal Book flow handles (it holds the court for 10 minutes while you send the code).
+FAST_PATH = False
+SESSION = {"auth": None, "user_id": None, "issue": None}  # filled in from the logged-in browser's own requests
 WEEKLY_CAP = 3
 SHOTS = Path("screenshots")
 SHOTS.mkdir(exist_ok=True)
@@ -204,7 +207,10 @@ def try_book(page, target, slot_label, courts, dry_run):
         return f"DRY RUN: would book {court} on {target:%a %b %d} at {slot_label}"
 
     dlg.get_by_role("button", name="Book", exact=True).click()
-    page.wait_for_timeout(4000)
+    log(f"Clicked Book for {court}")
+    issue_num = handle_text_code(page, court, target)
+    SESSION["issue"] = issue_num
+    page.wait_for_timeout(1000)
     # If a payment/confirm step appears, finish it (uses the card saved in your rec.us account).
     nxt = page.get_by_role("button", name=re.compile(r"^(Pay|Confirm|Complete|Place order|Checkout)", re.I))
     if nxt.count() and nxt.first.is_visible():
@@ -213,6 +219,81 @@ def try_book(page, target, slot_label, courts, dry_run):
         page.wait_for_timeout(5000)
     page.screenshot(path=str(SHOTS / "after_book.png"), full_page=True)
     return court
+
+
+# ---------- text-code step: you reply to a GitHub issue with the code rec.us texts you ----------
+
+def gh(method, path, data=None):
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}{path}",
+        method=method, data=json.dumps(data).encode() if data is not None else None,
+        headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                 "Accept": "application/vnd.github+json", "User-Agent": "dolores-tennis-bot"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.load(r)
+
+
+def wait_for_code_from_you(court, target, minutes=9.5):
+    """Open a GitHub issue (you get an email / app notification) and wait for your reply with the code."""
+    issue = gh("POST", "/issues", {
+        "title": f"🎾 Court held — reply with your rec.us code ({court}, {target:%a %b %d} 6 PM)",
+        "body": (f"rec.us is holding **{court} at Dolores, {target:%A %b %d}, 6:00 PM** for about 10 minutes.\n\n"
+                 "**Reply to this (email reply or GitHub app) with the code rec.us just texted you** — just the digits.")})
+    num = issue["number"]
+    owner = os.environ.get("GITHUB_REPOSITORY_OWNER", "").lower()
+    log(f"Waiting for your code on issue #{num}")
+    stop = time.time() + minutes * 60
+    while time.time() < stop:
+        for c in gh("GET", f"/issues/{num}/comments"):
+            if owner and c["user"]["login"].lower() != owner:
+                continue
+            m = re.search(r"\b(\d{4,8})\b", c.get("body") or "")
+            if m:
+                log("Got your code")
+                return num, m.group(1)
+        time.sleep(3)
+    return num, None
+
+
+def finish_issue(num, text):
+    try:
+        gh("POST", f"/issues/{num}/comments", {"body": text})
+        gh("PATCH", f"/issues/{num}", {"state": "closed"})
+    except Exception as e:
+        log(f"Couldn't update issue: {e}")
+
+
+CODE_INPUT = 'input[name="totp"], input[autocomplete="one-time-code"], input[name*="code" i], input[inputmode="numeric"]'
+
+
+def handle_text_code(page, court, target):
+    """If rec.us asks for the texted code, get it from you and enter it. Returns issue number or None."""
+    send = page.get_by_role("button", name=re.compile(r"send( code)?|text me|send text", re.I))
+    box = page.locator(CODE_INPUT)
+    for _ in range(16):  # up to ~8s for the code step to show up
+        if box.count() and box.first.is_visible():
+            break
+        if send.count() and send.first.is_visible():
+            log("Asking rec.us to text the code")
+            send.first.click()
+        page.wait_for_timeout(500)
+    if not (box.count() and box.first.is_visible()):
+        log("No code prompt seen after Book. Page: " + page_excerpt(page, 400))
+        return None
+    page.screenshot(path=str(SHOTS / "code_prompt.png"), full_page=True)
+    num, code = wait_for_code_from_you(court, target)
+    SESSION["issue"] = num
+    if not code:
+        finish_issue(num, "⏱️ No code received in time — the hold expired. Sorry!")
+        raise RuntimeError("No code received from you within the 10-minute hold")
+    box.first.fill(code)
+    page.wait_for_timeout(300)
+    btn = page.get_by_role("button", name=re.compile(r"verify|confirm|submit|continue|book|done", re.I))
+    if btn.count():
+        btn.last.click()
+    page.wait_for_timeout(5000)
+    page.screenshot(path=str(SHOTS / "after_code.png"), full_page=True)
+    return num
 
 
 def watch_session(page):
@@ -321,7 +402,7 @@ def main():
 
             log(f"Session ready for direct booking: token={'yes' if SESSION['auth'] else 'no'}, "
                 f"user={'yes' if SESSION['user_id'] else 'no'}")
-            if not dry_run:
+            if FAST_PATH and not dry_run:
                 fast_court = fast_book(page, target, slot_min, w, open_at if not no_wait else datetime.now(PT))
                 if fast_court:
                     if target in my_booking_dates(page):
@@ -356,16 +437,20 @@ def main():
                 except Exception as e:
                     log(f"Attempt {attempt} failed: {e}")
                     page.screenshot(path=str(SHOTS / f"error_{attempt}.png"), full_page=True)
-                    if attempt == 3:
-                        raise
+                    if attempt == 3 or SESSION["issue"] or "No code received" in str(e):
+                        raise  # never re-book once a code request has gone out
             if dry_run:
                 write_result("dry_run", court)
                 return
 
             # Verify it really shows up in your bookings
             if target in my_booking_dates(page):
+                if SESSION["issue"]:
+                    finish_issue(SESSION["issue"], f"✅ Booked {court}, {target:%a %b %d} {slot_label}. See you on court!")
                 write_result("booked", f"Booked {court} at Dolores, {target:%a %b %d} {slot_label}")
             else:
+                if SESSION["issue"]:
+                    finish_issue(SESSION["issue"], "❌ Entered your code but the booking didn't show up. Check rec.us.")
                 write_result("fail", f"Clicked Book for {court} on {target:%a %b %d} but it isn't in your "
                                      f"bookings. Check the screenshots / rec.us.")
         except Exception as e:
