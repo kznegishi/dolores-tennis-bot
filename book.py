@@ -65,10 +65,12 @@ def slot_minutes(label):  # "6:00 PM" -> 1080
 
 # ---------- public schedule API (no login needed) ----------
 
-def slot_is_open(target: date, courts, slot_min) -> bool:
+def slot_is_open(page, target: date, courts, slot_min) -> bool:
+    # Fetched from inside the logged-in browser (rec.us blocks non-browser requests).
     url = SCHEDULE_API.format(d=target.isoformat())
-    with urllib.request.urlopen(url, timeout=10) as r:
-        data = json.load(r)
+    data = page.evaluate(
+        "async u => { const r = await fetch(u); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }",
+        url)
     for court in data.get("dates", {}).get(target.strftime("%Y%m%d"), []):
         if court.get("courtNumber") not in courts:
             continue
@@ -257,7 +259,7 @@ def main():
             deadline = time.time() + 180
             while True:
                 try:
-                    if slot_is_open(target, w["courts"], slot_min):
+                    if slot_is_open(page, target, w["courts"], slot_min):
                         break
                 except Exception as e:
                     log(f"schedule check error: {e}")
@@ -266,7 +268,7 @@ def main():
                     # A morning miss is fine (noon run on Court 3 is the backup); a noon miss is final.
                     write_result("miss" if mode == "morning" else "fail", msg)
                     return
-                time.sleep(0.7)
+                time.sleep(0.4)
             log("Slot is open; booking")
 
             for attempt in range(1, 4):
