@@ -39,17 +39,13 @@ jobs:
   book:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Microsoft's image already has Chromium + all system packages, so there is
+    # no slow/flaky apt install before the 8:00 AM run.
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.56.0-noble
+      options: --ipc=host
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install Playwright
-        run: |
-          pip install playwright==1.56.0
-          python -m playwright install --with-deps chromium
 
       - name: Run bot
         id: bot
@@ -61,7 +57,9 @@ jobs:
           MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'auto' }}
           TARGET_DATE: ${{ inputs.target_date }}
           SLOT_TIME: ${{ inputs.slot_time || '6:00 PM' }}
-        run: python book.py
+        run: |
+          pip install --quiet playwright==1.56.0 --break-system-packages 2>/dev/null || pip install --quiet playwright==1.56.0
+          python3 book.py
 
       - name: Email me on success (opens an issue)
         if: success()
