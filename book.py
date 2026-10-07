@@ -95,7 +95,7 @@ def login(page, email, password):
     dismiss_cookies(page)
     page.get_by_role("button", name="Log in").first.click()
     dlg = page.locator("[role=dialog]").filter(has=page.locator("input[type=password]"))
-    dlg.locator("input:not([type=password])").first.fill(email)
+    dlg.get_by_role("textbox").first.fill(email)  # visible email box (skips hidden inputs)
     dlg.locator("input[type=password]").fill(password)
     dlg.locator("button[type=submit]").click()
     try:
@@ -206,7 +206,8 @@ def try_book(page, target, slot_label, courts, dry_run):
 
 
 def main():
-    email, password = os.environ["REC_EMAIL"], os.environ["REC_PASSWORD"]
+    email = os.environ["REC_EMAIL"].strip()
+    password = os.environ["REC_PASSWORD"].strip("\r\n")
     dry_run = env_bool("DRY_RUN", True)
     no_wait = env_bool("NO_WAIT")
     slot_label = os.environ.get("SLOT_TIME") or "6:00 PM"
