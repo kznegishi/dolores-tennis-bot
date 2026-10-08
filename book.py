@@ -76,12 +76,14 @@ def slot_minutes(label):  # "6:00 PM" -> 1080
 
 # ---------- public schedule API (no login needed) ----------
 
-def slot_is_open(page, target: date, courts, slot_min) -> bool:
+def slot_status(page, target: date, courts, slot_min) -> dict:
+    """{'Court 1': 'RESERVABLE' | 'RESERVATION' | 'missing' ...} for the slot we want."""
     # Fetched from inside the logged-in browser (rec.us blocks non-browser requests).
     url = SCHEDULE_API.format(d=target.isoformat())
     data = page.evaluate(
         "async u => { const r = await fetch(u); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }",
         url)
+    status = {c: "missing" for c in courts}
     for court in data.get("dates", {}).get(target.strftime("%Y%m%d"), []):
         if court.get("courtNumber") not in courts:
             continue
@@ -89,9 +91,13 @@ def slot_is_open(page, target: date, courts, slot_min) -> bool:
             start, end = [x.strip() for x in rng.split(",")]
             s = int(start[:2]) * 60 + int(start[3:])
             e = int(end[:2]) * 60 + int(end[3:])
-            if s <= slot_min < e and info.get("referenceType") == "RESERVABLE":
-                return True
-    return False
+            if s <= slot_min < e:
+                status[court["courtNumber"]] = info.get("referenceType", "?")
+    return status
+
+
+def slot_is_open(page, target: date, courts, slot_min) -> bool:
+    return "RESERVABLE" in slot_status(page, target, courts, slot_min).values()
 
 
 # ---------- browser steps ----------
@@ -382,7 +388,7 @@ def main():
     open_at = now.replace(hour=w["open_hour"], minute=0, second=0, microsecond=0)
 
     # GitHub runs each schedule twice (one per daylight-saving offset); skip the wrong one.
-    if not no_wait and not (open_at - timedelta(minutes=40) <= now <= open_at + timedelta(minutes=40)):
+    if not no_wait and not (open_at - timedelta(minutes=50) <= now <= open_at + timedelta(minutes=10)):
         write_result("skip", f"Not near the {mode} opening time (now {now:%H:%M} PT)")
         return
 
@@ -427,14 +433,21 @@ def main():
                 while datetime.now(PT) < open_at - timedelta(seconds=2):
                     time.sleep(min(20, max(0.2, (open_at - datetime.now(PT)).total_seconds() - 2)))
             deadline = time.time() + 180
+            last = None
             while True:
                 try:
-                    if slot_is_open(page, target, w["courts"], slot_min):
+                    st = slot_status(page, target, w["courts"], slot_min)
+                    if st != last:
+                        log(f"slot status: {st}")
+                        last = st
+                    if "RESERVABLE" in st.values():
                         break
                 except Exception as e:
                     log(f"schedule check error: {e}")
                 if time.time() > deadline:
-                    msg = f"No {slot_label} slot open on {', '.join(w['courts'])} for {target:%a %b %d}"
+                    late = (datetime.now(PT) - open_at).total_seconds() / 60
+                    msg = (f"No {slot_label} slot open on {', '.join(w['courts'])} for {target:%a %b %d} "
+                           f"(bot was checking from {late - 3:.0f} min after opening; status {last})")
                     # A morning miss is fine (noon run on Court 3 is the backup); a noon miss is final.
                     write_result("miss" if mode == "morning" else "fail", msg)
                     return
