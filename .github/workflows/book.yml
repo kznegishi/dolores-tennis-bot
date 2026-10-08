@@ -4,11 +4,12 @@ on:
   schedule:
     # Times are UTC. Each window is listed twice (PDT and PST offsets);
     # the script skips the copy that doesn't line up with Pacific time.
-    # 8 AM window (Courts 1 & 2, 7 days ahead): start ~7:45 AM PT, Mon-Fri
-    - cron: "45 14,15 * * 1-5"
-    # Noon window (Court 3, 2 days ahead): start ~11:45 AM PT, Sat-Wed
+    # GitHub often starts scheduled jobs 10-20+ min late, so start well early on an odd minute.
+    # 8 AM window (Courts 1 & 2, 7 days ahead): start ~7:17 AM PT, Mon-Fri
+    - cron: "17 14,15 * * 1-5"
+    # Noon window (Court 3, 2 days ahead): start ~11:31 AM PT, Sat-Wed
     # (Sat->Mon, Sun->Tue, Mon->Wed, Tue->Thu, Wed->Fri)
-    - cron: "45 18,19 * * 0,1,2,3,6"
+    - cron: "31 18,19 * * 0,1,2,3,6"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -69,11 +70,12 @@ jobs:
           script: |
             const fs = require('fs');
             const r = JSON.parse(fs.readFileSync('result.json', 'utf8'));
-            if (r.status === 'booked' || r.status === 'dry_run') {
+            if (r.status === 'booked' || r.status === 'dry_run' || r.status === 'miss') {
+              const icon = {booked: '🎾 ', dry_run: '🧪 ', miss: '😕 Missed: '}[r.status];
               await github.rest.issues.create({
                 owner: context.repo.owner, repo: context.repo.repo,
-                title: (r.status === 'booked' ? '🎾 ' : '🧪 ') + r.message,
-                body: `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+                title: icon + r.message,
+                body: `@${context.repo.owner} Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
               });
             }
 
