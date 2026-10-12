@@ -102,10 +102,28 @@ def slot_is_open(page, target: date, courts, slot_min) -> bool:
 
 # ---------- browser steps ----------
 
+HIDE_COOKIE_BANNER = """
+(() => {
+  const css = '.osano-cm-window, .osano-cm-dialog, [aria-label="Cookie Consent Banner"] { display: none !important; pointer-events: none !important; }';
+  const add = () => {
+    const root = document.head || document.documentElement;
+    if (!root || document.getElementById('no-cookie-banner')) return;
+    const s = document.createElement('style'); s.id = 'no-cookie-banner'; s.textContent = css;
+    root.appendChild(s);
+  };
+  add(); document.addEventListener('DOMContentLoaded', add);
+  setInterval(add, 250);  // re-add if the page rebuilds <head>
+})();
+"""
+
+
 def dismiss_cookies(page):
+    """Decline non-essential cookies if the banner is up (it is also hidden by CSS on every page)."""
     try:
-        page.get_by_role("button", name="Deny Non-Essential").click(timeout=2000)
-    except PWTimeout:
+        btn = page.get_by_role("button", name="Deny Non-Essential")
+        if btn.count() and btn.first.is_visible():
+            btn.first.click(timeout=2000)
+    except Exception:
         pass
 
 
@@ -177,6 +195,7 @@ def select_date(page, target: date):
 
 def try_book(page, target, slot_label, courts, dry_run):
     page.goto(LOCATION_URL, wait_until="domcontentloaded")
+    dismiss_cookies(page)
     select_date(page, target)
     slot = page.locator("button").filter(has_text=re.compile(rf"^\s*{re.escape(slot_label)}"))
     slot.first.click(timeout=8000)
@@ -402,6 +421,7 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1100, "height": 1000})
+        page.add_init_script(HIDE_COOKIE_BANNER)  # the cookie banner can never block a click
         watch_session(page)
         try:
             login(page, email, password)
