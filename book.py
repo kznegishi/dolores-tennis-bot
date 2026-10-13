@@ -190,7 +190,10 @@ def select_date(page, target: date):
     cell = page.locator(f'td[data-day="{target.isoformat()}"] button')
     if cell.count() == 0:  # target is in next month's view
         page.get_by_role("button", name=re.compile("next month", re.I)).click()
-    cell.click(timeout=5000)
+    cell.wait_for(timeout=3000)
+    if cell.is_disabled():
+        raise RuntimeError("date not open yet")  # booking window hasn't opened on the site; reload and retry
+    cell.click(timeout=3000)
 
 
 def try_book(page, target, slot_label, courts, dry_run):
@@ -235,6 +238,8 @@ def try_book(page, target, slot_label, courts, dry_run):
     dlg.get_by_role("button", name="Book", exact=True).click()
     log(f"Clicked Book for {court}")
     issue_num = handle_text_code(page, court, target)
+    if not issue_num:
+        raise RuntimeError(f"Book didn't hold {court} (no text-code step appeared)")
     SESSION["issue"] = issue_num
     page.wait_for_timeout(1000)
     # If a payment/confirm step appears, finish it (uses the card saved in your rec.us account).
@@ -472,17 +477,28 @@ def main():
                     write_result("miss" if mode == "morning" else "fail", msg)
                     return
                 time.sleep(0.4)
+            # rec.us's schedule says "reservable" a little before the window really opens,
+            # so never start clicking before the exact opening second.
+            if not no_wait:
+                while datetime.now(PT) < open_at + timedelta(milliseconds=150):
+                    time.sleep(0.01)
             log("Slot is open; booking")
 
-            for attempt in range(1, 4):
+            courts = list(w["courts"])
+            stop_at = time.time() + 40
+            attempt = 0
+            while True:
+                attempt += 1
                 try:
-                    court = try_book(page, target, slot_label, w["courts"], dry_run)
+                    court = try_book(page, target, slot_label, courts, dry_run)
                     break
                 except Exception as e:
-                    log(f"Attempt {attempt} failed: {e}")
-                    page.screenshot(path=str(SHOTS / f"error_{attempt}.png"), full_page=True)
-                    if attempt == 3 or SESSION.get("clicked_book") or SESSION["issue"]:
+                    log(f"Attempt {attempt} failed: {str(e).splitlines()[0][:200]}")
+                    if attempt <= 6:
+                        page.screenshot(path=str(SHOTS / f"error_{attempt}.png"), full_page=True)
+                    if SESSION["issue"] or time.time() > stop_at:
                         raise  # never re-book once a code request has gone out
+                    courts = courts[1:] + courts[:1]  # try the other court next
             if dry_run:
                 write_result("dry_run", court)
                 return
