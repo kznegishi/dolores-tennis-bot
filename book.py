@@ -46,9 +46,11 @@ SITE_ACTIVITY = {
     "Court 3": "e7220541-0d10-45a1-95a0-0cade5b20720",
 }
 API_RESERVE = "https://api.rec.us/v1/reservations"
-# Direct request is off: rec.us requires a texted code on every booking, which only the
-# normal Book flow handles (it holds the court for 10 minutes while you send the code).
-FAST_PATH = False
+# Direct request is ON. rec.us's own flow is: verify the texted code -> create the reservation
+# -> checkout. So the bot verifies your code a few minutes BEFORE 8:00, then fires the
+# reservation request itself at 8:00:00.000 (~0.1-0.3s), then pays during the 10-minute hold.
+FAST_PATH = True
+VERIFY_LEAD_MIN = 8  # ask for the code this many minutes before opening
 SESSION = {"auth": None, "user_id": None, "issue": None}  # filled in from the logged-in browser's own requests
 WEEKLY_CAP = 3
 SHOTS = Path("screenshots")
@@ -370,6 +372,82 @@ def api_book(page, court, target: date, slot_min, minutes):
     return 200 <= res["status"] < 300, res["status"], res["text"]
 
 
+def api(page, method, path, body=None):
+    """Call rec.us's API from inside the logged-in browser, exactly like the site does."""
+    return page.evaluate(
+        """async ({url, method, auth, body}) => {
+            const r = await fetch(url, {method, headers: {'Content-Type': 'application/json', 'Authorization': auth},
+                                        body: body == null ? undefined : JSON.stringify(body)});
+            return {status: r.status, text: (await r.text()).slice(0, 800)};
+        }""",
+        {"url": "https://api.rec.us/" + path, "method": method, "auth": SESSION["auth"], "body": body})
+
+
+def verify_code_early(target, slot_label, page):
+    """Have rec.us text you a code, get it from your GitHub reply, and verify it -- all before 8:00."""
+    r = api(page, "POST", "v1/users/mobile-totp/send")
+    log(f"asked rec.us to text your code: {r['status']} {r['text'][:200]}")
+    owner_login = os.environ.get("GITHUB_REPOSITORY_OWNER", "")
+    issue = gh("POST", "/issues", {
+        "title": f"🔐 Reply with your rec.us code now — bot books {target:%a %b %d} {slot_label} at 8:00:00",
+        "body": (f"@{owner_login} rec.us just texted you a 6-digit code. **Reply here with just the digits.**\n\n"
+                 "The bot verifies it now, then fires the booking at exactly 8:00:00.")})
+    num = issue["number"]
+    SESSION["verify_issue"] = num
+    stop = time.time() + 9 * 60
+    owner = owner_login.lower()
+    while time.time() < stop:
+        try:
+            comments = gh("GET", f"/issues/{num}/comments")
+        except Exception as e:
+            log(f"(retrying GitHub check: {e})")
+            time.sleep(3)
+            continue
+        for c in comments:
+            if owner and c["user"]["login"].lower() != owner:
+                continue
+            m = re.search(r"\b(\d{6})\b", c.get("body") or "")
+            if m:
+                v = api(page, "POST", "v1/users/mobile-totp/verify", {"code": m.group(1)})
+                log(f"verify code: {v['status']} {v['text'][:200]}")
+                ok = 200 <= v["status"] < 300
+                try:
+                    gh("POST", f"/issues/{num}/comments", {"body": "✅ Code verified — booking fires at 8:00:00." if ok
+                       else "❌ rec.us rejected that code. Reply with the newest code."})
+                except Exception:
+                    pass
+                if ok:
+                    return True
+        time.sleep(2)
+    return False
+
+
+def checkout_and_pay(page, dry_run):
+    """Open the cart/checkout page (where the court is held ~10 min) and pay with your saved card."""
+    page.goto("https://www.rec.us/cart/checkout", wait_until="domcontentloaded")
+    page.wait_for_timeout(4000)
+    dismiss_cookies(page)
+    page.screenshot(path=str(SHOTS / "checkout.png"), full_page=True)
+    log("Checkout page: " + page_excerpt(page, 1500))
+    btns = [b.strip() for b in page.locator("button").all_inner_texts() if b.strip()]
+    log(f"Checkout buttons: {btns[:25]}")
+    if dry_run:
+        return False
+    for step in range(4):  # click through up to 4 confirm/pay screens
+        btn = page.get_by_role("button", name=re.compile(
+            r"^(pay|place order|complete|confirm|checkout|submit|book|finish)", re.I))
+        vis = [b for b in btn.all() if b.is_visible() and b.is_enabled()]
+        if not vis:
+            break
+        label = vis[-1].inner_text().strip()
+        log(f"Clicking '{label}'")
+        vis[-1].click()
+        page.wait_for_timeout(4000)
+        page.screenshot(path=str(SHOTS / f"pay_{step}.png"), full_page=True)
+        log("After click: " + page_excerpt(page, 600))
+    return True
+
+
 def fast_book(page, target, slot_min, w, open_at):
     """Fire booking requests right at opening time, alternating courts, for ~15 seconds."""
     if not (SESSION["auth"] and SESSION["user_id"]):
@@ -444,13 +522,38 @@ def main():
 
             log(f"Session ready for direct booking: token={'yes' if SESSION['auth'] else 'no'}, "
                 f"user={'yes' if SESSION['user_id'] else 'no'}")
-            if FAST_PATH and not dry_run:
+            if FAST_PATH:
+                # 1) text code, verified before the window opens
+                if not no_wait:
+                    while datetime.now(PT) < open_at - timedelta(minutes=VERIFY_LEAD_MIN):
+                        time.sleep(5)
+                if not verify_code_early(target, slot_label, page):
+                    write_result("fail", "No verified code from you before opening, so the bot couldn't book.")
+                    return
+                # 2) refresh the login token ~25s before opening, then fire at the exact opening instant
+                if not no_wait:
+                    while datetime.now(PT) < open_at - timedelta(seconds=25):
+                        time.sleep(1)
+                    page.goto(LOCATION_URL, wait_until="domcontentloaded")
+                    page.wait_for_timeout(2000)
+                    log(f"token refreshed: {'yes' if SESSION['auth'] else 'no'}")
                 fast_court = fast_book(page, target, slot_min, w, open_at if not no_wait else datetime.now(PT))
                 if fast_court:
+                    log(f"HELD {fast_court} via direct request")
+                    # 3) pay during the hold
+                    paid = checkout_and_pay(page, dry_run)
+                    if dry_run:
+                        write_result("dry_run", f"TEST: held {fast_court} {target:%a %b %d} {slot_label}; stopped at checkout (not paid — hold expires on its own)")
+                        return
                     if target in my_booking_dates(page):
                         write_result("booked", f"Booked {fast_court} at Dolores, {target:%a %b %d} {slot_label}")
-                        return
-                    log("Direct booking said OK but it isn't in your bookings yet; trying click-through too")
+                    else:
+                        write_result("fail", f"Held {fast_court} {target:%a %b %d} but payment didn't finish — "
+                                             "open rec.us cart NOW to pay within 10 min. Check screenshots.")
+                    return
+                write_result("miss" if mode == "morning" else "fail",
+                             f"Direct booking didn't get {', '.join(w['courts'])} {target:%a %b %d} {slot_label}")
+                return
 
             # Wait for the window to open, then poll until the slot shows as reservable.
             if not no_wait:
