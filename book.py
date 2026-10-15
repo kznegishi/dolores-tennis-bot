@@ -50,7 +50,6 @@ API_RESERVE = "https://api.rec.us/v1/reservations"
 # -> checkout. So the bot verifies your code a few minutes BEFORE 8:00, then fires the
 # reservation request itself at 8:00:00.000 (~0.1-0.3s), then pays during the 10-minute hold.
 FAST_PATH = True
-VERIFY_LEAD_MIN = 8  # ask for the code this many minutes before opening
 SESSION = {"auth": None, "user_id": None, "issue": None}  # filled in from the logged-in browser's own requests
 WEEKLY_CAP = 3
 SHOTS = Path("screenshots")
@@ -383,18 +382,18 @@ def api(page, method, path, body=None):
         {"url": "https://api.rec.us/" + path, "method": method, "auth": SESSION["auth"], "body": body})
 
 
-def verify_code_early(target, slot_label, page):
-    """Have rec.us text you a code, get it from your GitHub reply, and verify it -- all before 8:00."""
+def verify_code_after_hold(target, slot_label, court, page):
+    """Court is already held (~10 min). Have rec.us text you a code, get your GitHub reply, verify it."""
     r = api(page, "POST", "v1/users/mobile-totp/send")
     log(f"asked rec.us to text your code: {r['status']} {r['text'][:200]}")
     owner_login = os.environ.get("GITHUB_REPOSITORY_OWNER", "")
     issue = gh("POST", "/issues", {
-        "title": f"🔐 Reply with your rec.us code now — bot books {target:%a %b %d} {slot_label} at 8:00:00",
-        "body": (f"@{owner_login} rec.us just texted you a 6-digit code. **Reply here with just the digits.**\n\n"
-                 "The bot verifies it now, then fires the booking at exactly 8:00:00.")})
+        "title": f"🎾 Court HELD — reply with your rec.us code ({court}, {target:%a %b %d} {slot_label})",
+        "body": (f"@{owner_login} The bot grabbed **{court}, {target:%A %b %d}, {slot_label}**. rec.us holds it ~10 min.\n\n"
+                 "**Reply here with just the 6 digits rec.us texted you.** The bot then pays with your saved card.")})
     num = issue["number"]
     SESSION["verify_issue"] = num
-    stop = time.time() + 9 * 60
+    stop = time.time() + 8.5 * 60
     owner = owner_login.lower()
     while time.time() < stop:
         try:
@@ -412,7 +411,7 @@ def verify_code_early(target, slot_label, page):
                 log(f"verify code: {v['status']} {v['text'][:200]}")
                 ok = 200 <= v["status"] < 300
                 try:
-                    gh("POST", f"/issues/{num}/comments", {"body": "✅ Code verified — booking fires at 8:00:00." if ok
+                    gh("POST", f"/issues/{num}/comments", {"body": "✅ Code verified — paying now." if ok
                        else "❌ rec.us rejected that code. Reply with the newest code."})
                 except Exception:
                     pass
@@ -523,14 +522,7 @@ def main():
             log(f"Session ready for direct booking: token={'yes' if SESSION['auth'] else 'no'}, "
                 f"user={'yes' if SESSION['user_id'] else 'no'}")
             if FAST_PATH:
-                # 1) text code, verified before the window opens
-                if not no_wait:
-                    while datetime.now(PT) < open_at - timedelta(minutes=VERIFY_LEAD_MIN):
-                        time.sleep(5)
-                if not verify_code_early(target, slot_label, page):
-                    write_result("fail", "No verified code from you before opening, so the bot couldn't book.")
-                    return
-                # 2) refresh the login token ~25s before opening, then fire at the exact opening instant
+                # 1) refresh the login token ~25s before opening, then fire at the exact opening instant
                 if not no_wait:
                     while datetime.now(PT) < open_at - timedelta(seconds=25):
                         time.sleep(1)
@@ -540,6 +532,11 @@ def main():
                 fast_court = fast_book(page, target, slot_min, w, open_at if not no_wait else datetime.now(PT))
                 if fast_court:
                     log(f"HELD {fast_court} via direct request")
+                    # 2) court is held ~10 min: now get the texted code from you
+                    if not dry_run and not verify_code_after_hold(target, slot_label, fast_court, page):
+                        write_result("fail", f"Held {fast_court} {target:%a %b %d} but no valid code arrived in time — "
+                                             "open rec.us cart NOW if the hold is still there.")
+                        return
                     # 3) pay during the hold
                     paid = checkout_and_pay(page, dry_run)
                     if dry_run:
