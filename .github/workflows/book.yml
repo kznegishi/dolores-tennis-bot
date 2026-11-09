@@ -6,10 +6,10 @@ on:
     # the script skips the copy that doesn't line up with Pacific time.
     # GitHub often starts scheduled jobs 10-20+ min late, so start well early on an odd minute.
     # 8 AM window (Courts 1 & 2, 7 days ahead): start ~7:17 AM PT, Mon-Fri
-    - cron: "3,17,31 14,15 * * 1-5"
+    - cron: "13,27,41 14,15 * * 1-5"
     # Noon window (Court 3, 2 days ahead): start ~11:31 AM PT, Sat-Wed
     # (Sat->Mon, Sun->Tue, Mon->Wed, Tue->Thu, Wed->Fri)
-    - cron: "31 18,19 * * 0,1,2,3,6"
+    - cron: "13,27,41 18,19 * * 0,1,2,3,6"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -39,7 +39,7 @@ permissions:
 jobs:
   book:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
     # Microsoft's image already has Chromium + all system packages, so there is
     # no slow/flaky apt install before the 8:00 AM run.
     container:
