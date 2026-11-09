@@ -30,19 +30,19 @@ from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 PT = ZoneInfo("America/Los_Angeles")
-LOCATION_ID = "95745483-6b38-4e99-8ba2-a3e23cda8587"  # Dolores
+LOCATION_ID = "8c3b9b04-a149-4080-b648-e3ff8365bbee"  # Hamilton
 LOCATION_URL = f"https://www.rec.us/locations/{LOCATION_ID}"
 SCHEDULE_API = f"https://api.rec.us/v1/locations/{LOCATION_ID}/schedule?startDate={{d}}"
 BOOKINGS_URL = "https://www.rec.us/app/schedule"
 
 WINDOWS = {
-    "morning": {"open_hour": 8, "days_ahead": 7, "courts": ["Court 1", "Court 2"], "minutes": 90},  # 8 AM
-    "noon": {"open_hour": 12, "days_ahead": 2, "courts": ["Court 3"], "minutes": 60},
+    "morning": {"open_hour": 8, "days_ahead": 7, "courts": ["Court 1"], "minutes": 90},  # 8 AM
+    "noon": {"open_hour": 12, "days_ahead": 2, "courts": ["Court 2"], "minutes": 90},
 }
 # rec.us "site activity" IDs (tennis) for each Dolores court, used by the direct booking request.
 SITE_ACTIVITY = {
-    "Court 1": "1bcdebfc-cb10-45e8-a914-b9e7a99bf9cb",
-    "Court 2": "06af27d8-eded-4d99-9c3f-5b2e17ff9730",
+    "Court 1": "e9b0665a-debc-4766-8cff-a28f8ed31a8e",  # Hamilton
+    "Court 2": "7545080e-502e-4e8d-a3e5-24432933e06b",  # Hamilton
     "Court 3": "e7220541-0d10-45a1-95a0-0cade5b20720",
 }
 API_RESERVE = "https://api.rec.us/v1/reservations"
