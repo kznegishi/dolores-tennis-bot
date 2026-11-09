@@ -32,7 +32,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 PT = ZoneInfo("America/Los_Angeles")
 LOCATION_ID = "8c3b9b04-a149-4080-b648-e3ff8365bbee"  # Hamilton
 LOCATION_URL = f"https://www.rec.us/locations/{LOCATION_ID}"
-SCHEDULE_API = f"https://api.rec.us/v1/locations/{LOCATION_ID}/schedule?startDate={{d}}"
+PARKS = {"Hamilton": {"id": "8c3b9b04-a149-4080-b648-e3ff8365bbee", "morning": ["Court 1"], "noon": ["Court 2"], "noon_min": 90, "acts": {"Court 1": "e9b0665a-debc-4766-8cff-a28f8ed31a8e", "Court 2": "7545080e-502e-4e8d-a3e5-24432933e06b"}}, "Dolores": {"id": "95745483-6b38-4e99-8ba2-a3e23cda8587", "morning": ["Court 1", "Court 2"], "noon": ["Court 3"], "noon_min": 60, "acts": {"Court 1": "1bcdebfc-cb10-45e8-a914-b9e7a99bf9cb", "Court 2": "06af27d8-eded-4d99-9c3f-5b2e17ff9730", "Court 3": "e7220541-0d10-45a1-95a0-0cade5b20720"}}}; DAY_PARK = {1: "Hamilton", 2: "Dolores", 3: "Dolores"}; LOCATION_ID = PARKS["Dolores"]["id"]  # Tue = Hamilton, Wed/Thu = Dolores
 BOOKINGS_URL = "https://www.rec.us/app/schedule"
 
 WINDOWS = {
@@ -495,10 +495,10 @@ def main():
 
     target = (date.fromisoformat(os.environ["TARGET_DATE"]) if os.environ.get("TARGET_DATE")
               else now.date() + timedelta(days=w["days_ahead"]))
-    if target.weekday() > 4:
-        write_result("skip", f"{target:%a %b %d} is a weekend")
+    if target.weekday() not in DAY_PARK:
+        write_result("skip", f"{target:%a %b %d}: no park set for that day")
         return
-    log(f"Mode={mode} target={target:%a %Y-%m-%d} slot={slot_label} courts={w['courts']} dry_run={dry_run}")
+    global LOCATION_ID, LOCATION_URL, SCHEDULE_API; park = DAY_PARK[target.weekday()]; P = PARKS[park]; LOCATION_ID = P["id"]; LOCATION_URL = f"https://www.rec.us/locations/{LOCATION_ID}"; SCHEDULE_API = f"https://api.rec.us/v1/locations/{LOCATION_ID}/schedule?startDate={{d}}"; SITE_ACTIVITY.clear(); SITE_ACTIVITY.update(P["acts"]); w = dict(w, courts=P[mode], minutes=(90 if mode == "morning" else P["noon_min"])); SESSION["park"] = park; log(f"Park={park} Mode={mode} target={target:%a %Y-%m-%d} slot={slot_label} courts={w['courts']} dry_run={dry_run}")
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -543,7 +543,7 @@ def main():
                         write_result("dry_run", f"TEST: held {fast_court} {target:%a %b %d} {slot_label}; stopped at checkout (not paid — hold expires on its own)")
                         return
                     if target in my_booking_dates(page):
-                        write_result("booked", f"Booked {fast_court} at Dolores, {target:%a %b %d} {slot_label}")
+                        write_result("booked", f"Booked {fast_court} at {SESSION.get('park')}, {target:%a %b %d} {slot_label}")
                     else:
                         write_result("fail", f"Held {fast_court} {target:%a %b %d} but payment didn't finish — "
                                              "open rec.us cart NOW to pay within 10 min. Check screenshots.")
