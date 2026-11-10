@@ -489,7 +489,7 @@ def main():
     open_at = now.replace(hour=w["open_hour"], minute=0, second=0, microsecond=0)
 
     # GitHub runs each schedule twice (one per daylight-saving offset); skip the wrong one.
-    if not no_wait and not (open_at - timedelta(minutes=50) <= now <= open_at + timedelta(minutes=10)):
+    if not no_wait and not (open_at - timedelta(minutes=80) <= now <= open_at + timedelta(minutes=10)):
         write_result("skip", f"Not near the {mode} opening time (now {now:%H:%M} PT)")
         return
 
