@@ -10,6 +10,7 @@ on:
     # Noon window (Court 3, 2 days ahead): start ~11:31 AM PT, Sat-Wed
     # (Sat->Mon, Sun->Tue, Mon->Wed, Tue->Thu, Wed->Fri)
     - cron: "13,27,41 18,19 * * 0,1,2,3,6"
+  repository_dispatch: {types: [book]}
   workflow_dispatch:
     inputs:
       dry_run:
