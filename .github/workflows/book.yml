@@ -15,13 +15,13 @@ on:
     inputs:
       dry_run:
         description: "Dry run (go through everything except clicking Book)"
+        default: false
         type: boolean
-        default: true
       mode:
         description: "morning (Courts 1-2) or noon (Court 3)"
         type: choice
         options: [noon, morning]
-        default: noon
+        default: morning
       target_date:
         description: "Date to book, YYYY-MM-DD (blank = normal rule)"
         required: false
