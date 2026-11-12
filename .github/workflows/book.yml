@@ -56,7 +56,7 @@ jobs:
           REC_PASSWORD: ${{ secrets.REC_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
-          NO_WAIT: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+          NO_WAIT: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
           MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'auto' }}
           TARGET_DATE: ${{ inputs.target_date }}
           SLOT_TIME: ${{ inputs.slot_time || '6:00 PM' }}
