@@ -81,7 +81,7 @@ jobs:
             }
 
       - name: Save screenshots
-        if: always()
+        if: false  # screenshots off: repo is public
         uses: actions/upload-artifact@v4
         with:
           name: screenshots
