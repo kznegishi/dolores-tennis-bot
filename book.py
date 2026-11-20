@@ -152,7 +152,7 @@ def page_excerpt(page, n=500):
         }""")
     except Exception as e:
         txt = f"(couldn't read page: {e})"
-    return f"[{page.url}] " + re.sub(r"\S+@\S+", "<email>", txt)[:n]
+    return f"[{page.url}] (page text not logged: public repo, {len(txt)} chars)"
 
 
 def my_booking_dates(page):
