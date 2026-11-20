@@ -489,7 +489,7 @@ def main():
     open_at = now.replace(hour=w["open_hour"], minute=0, second=0, microsecond=0)
 
     # GitHub runs each schedule twice (one per daylight-saving offset); skip the wrong one.
-    if not no_wait and not (open_at - timedelta(minutes=80) <= now <= open_at + timedelta(minutes=10)):
+    if not no_wait and not (open_at - timedelta(minutes=420) <= now <= open_at + timedelta(minutes=3)):
         write_result("skip", f"Not near the {mode} opening time (now {now:%H:%M} PT)")
         return
 
@@ -498,7 +498,7 @@ def main():
     if target.weekday() not in DAY_PARK:
         write_result("skip", f"{target:%a %b %d}: no park set for that day")
         return
-    global LOCATION_ID, LOCATION_URL, SCHEDULE_API; park = DAY_PARK[target.weekday()]; P = PARKS[park]; LOCATION_ID = P["id"]; LOCATION_URL = f"https://www.rec.us/locations/{LOCATION_ID}"; SCHEDULE_API = f"https://api.rec.us/v1/locations/{LOCATION_ID}/schedule?startDate={{d}}"; SITE_ACTIVITY.clear(); SITE_ACTIVITY.update(P["acts"]); w = dict(w, courts=P[mode], minutes=(90 if mode == "morning" else P["noon_min"])); SESSION["park"] = park; log(f"Park={park} Mode={mode} target={target:%a %Y-%m-%d} slot={slot_label} courts={w['courts']} dry_run={dry_run}")
+    global LOCATION_ID, LOCATION_URL, SCHEDULE_API; park = DAY_PARK[target.weekday()]; P = PARKS[park]; LOCATION_ID = P["id"]; LOCATION_URL = f"https://www.rec.us/locations/{LOCATION_ID}"; SCHEDULE_API = f"https://api.rec.us/v1/locations/{LOCATION_ID}/schedule?startDate={{d}}"; SITE_ACTIVITY.clear(); SITE_ACTIVITY.update(P["acts"]); w = dict(w, courts=P[mode], minutes=(90 if mode == "morning" else P["noon_min"])); SESSION["park"] = park; log(f"Park={park} Mode={mode} target={target:%a %Y-%m-%d} slot={slot_label} courts={w['courts']} dry_run={dry_run}"); time.sleep(0 if no_wait else max(0, (open_at - timedelta(minutes=12) - datetime.now(PT)).total_seconds()))
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
