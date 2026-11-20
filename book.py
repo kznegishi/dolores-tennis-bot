@@ -434,7 +434,7 @@ def checkout_and_pay(page, dry_run):
         return False
     for step in range(4):  # click through up to 4 confirm/pay screens
         btn = page.get_by_role("button", name=re.compile(
-            r"^(pay|place order|complete|confirm|checkout|submit|book|finish)", re.I))
+            r"^\s*(continue to payment|continue|pay|place order|complete|confirm|checkout|submit|book|finish|purchase)", re.I))
         vis = [b for b in btn.all() if b.is_visible() and b.is_enabled()]
         if not vis:
             break
